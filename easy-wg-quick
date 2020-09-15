@@ -75,6 +75,15 @@ get_ext_net_ip() {
     cat extnetip.txt
 }
 
+create_client_allowedip() {
+    echo "No intnetallowedip.txt... creating one!"
+    echo "0.0.0.0/0, ::/0" > intnetallowedip.txt
+}
+
+get_client_allowedip() {
+    cat intnetallowedip.txt
+}
+
 detect_fw_type() {
     if test "x$(uname -s)" = "xFreeBSD"; then
         echo "pf"
@@ -363,7 +372,7 @@ PrivateKey = $(wg genkey | tee "wgclient_$CONF_NAME.key")
 [Peer]
 PublicKey = $(wg pubkey < wghub.key)
 PresharedKey = $(cat wgpsk.key)
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = $(get_client_allowedip)
 Endpoint = $EXT_NET_IP:$EXT_NET_PORT
 PersistentKeepalive = 25
 EOF
@@ -396,6 +405,29 @@ Important: Deploy updated wghub.conf configuration to wireguard with wg-quick:
   sudo wg-quick up ./wghub.conf
   sudo wg show # to check status
 EOF
+}
+
+add_client_to_uci_conf() {
+    SEQNO="$1"
+    CONF_NAME="$2"
+    
+    UCI_CONF="/etc/config/network"
+
+    if [ ! -f "$UCI_CONF" ]; then
+        return
+    fi
+    printf "Updating $UCI_CONF ..."
+    cat >> "$UCI_CONF" << EOF
+
+config wireguard_wg0
+        option public_key '$(wg pubkey < "wgclient_$CONF_NAME.key")'
+        option description '$CONF_NAME'
+        list allowed_ips '$INT_NET_ADDRESS$SEQNO$INT_NET_ADDRESS_MASK'
+        $($NET6 && echo "list allowed_ips '$INT_NET6_ADDRESS$1$INT_NET6_ADDRESS_MASK'")
+        option preshared_key '$(cat wgpsk.key)'
+        # option persistent_keepalive '25'
+EOF
+    echo " done!"
 }
 
 print_client_conf() {
@@ -445,6 +477,7 @@ create_new_client() {
         print_client_conf "$CONF_NAME"
     fi
     add_client_to_hub_conf "$SEQNO" "$CONF_NAME"
+    add_client_to_uci_conf "$SEQNO" "$CONF_NAME"
     remove_temporary_client_key_file "$CONF_NAME"
 }
 
@@ -495,6 +528,7 @@ main() {
     test -f wgpsk.key  || create_psk
     test -f wghub.key  || create_hub_key
     test -f wghub.conf || create_hub_conf
+    test -f intnetallowedip.txt || create_client_allowedip
 
     if test -z "$CONF_NAME"; then
         CONF_NAME="$SEQNO"
